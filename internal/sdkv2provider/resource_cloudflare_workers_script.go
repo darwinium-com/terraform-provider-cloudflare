@@ -52,6 +52,32 @@ func getScriptData(d *schema.ResourceData, client *cloudflare.API) (ScriptData, 
 	}, nil
 }
 
+// type AdditionalFile
+type AdditionalFiles map[string]cloudflare.AdditionalFile
+
+func getAdditionalFiles(ctx context.Context, accountId, scriptName string, client *cloudflare.API) (AdditionalFiles, error) {
+	resp, err := client.ListAdditionalFiles(ctx, cloudflare.AccountIdentifier(accountId), cloudflare.ListAdditionalFilesParams{ScriptName: scriptName})
+	if err != nil {
+		return nil, fmt.Errorf("cannot list additional files: %w", err)
+	}
+	additionalfiles := make(AdditionalFiles, len(resp.AdditionalFiles))
+	for _, b := range resp.AdditionalFiles {
+		additionalfiles[b.FileName] = b
+	}
+	return additionalfiles, nil
+}
+
+func parseAdditionalFiles(d *schema.ResourceData, additionalfiles AdditionalFiles) {
+	for _, rawData := range d.Get("additional_file").(*schema.Set).List() {
+		data := rawData.(map[string]interface{})
+		additionalfiles[data["file_name"].(string)] = cloudflare.AdditionalFile{
+			FileName:    data["file_name"].(string),
+			FileContent: data["file_content"].(string),
+			ScriptType:  data["script_type"].(string),
+		}
+	}
+}
+
 type ScriptBindings map[string]cloudflare.WorkerBinding
 
 func getWorkerScriptBindings(ctx context.Context, accountId, scriptName string, client *cloudflare.API) (ScriptBindings, error) {
@@ -167,6 +193,10 @@ func resourceCloudflareWorkerScriptCreate(ctx context.Context, d *schema.Resourc
 
 	logpush := d.Get("logpush").(bool)
 
+	// Add additional files
+	additionalfiles := make(AdditionalFiles)
+	parseAdditionalFiles(d, additionalfiles)
+
 	_, err = client.UploadWorker(ctx, cloudflare.AccountIdentifier(accountID), cloudflare.CreateWorkerParams{
 		ScriptName:         scriptData.Params.ScriptName,
 		Script:             scriptBody,
@@ -175,7 +205,9 @@ func resourceCloudflareWorkerScriptCreate(ctx context.Context, d *schema.Resourc
 		Module:             d.Get("module").(bool),
 		Bindings:           bindings,
 		Logpush:            &logpush,
-	})
+		AdditionalFiles:    additionalfiles,
+	},
+	)
 	if err != nil {
 		return diag.FromErr(errors.Wrap(err, "error creating worker script"))
 	}
@@ -317,9 +349,31 @@ func resourceCloudflareWorkerScriptRead(ctx context.Context, d *schema.ResourceD
 		return diag.FromErr(fmt.Errorf("cannot set queue bindings (%s): %w", d.Id(), err))
 	}
 
+	//Read additional files
+	existingAdditionalFiles := make(AdditionalFiles)
+
+	parseAdditionalFiles(d, existingAdditionalFiles)
+
+	additionalfiles, err := getAdditionalFiles(ctx, accountID, d.Get("name").(string), client)
+	if err != nil {
+		return diag.FromErr(err)
+	}
+	additionalFilesBucket := &schema.Set{F: schema.HashResource(additionalFileResource)}
+	for _, additionalfile := range additionalfiles {
+		additionalFilesBucket.Add(map[string]interface{}{
+			"file_name":    additionalfile.FileName,
+			"script_type":  additionalfile.ScriptType,
+			"file_content": additionalfile.FileContent,
+		})
+	}
+	if err := d.Set("additional_file", additionalFilesBucket); err != nil {
+		return diag.FromErr(fmt.Errorf("cannot set additional files (%s): %w", d.Id(), err))
+	}
+
 	d.SetId(scriptData.ID)
 
 	return nil
+
 }
 
 func resourceCloudflareWorkerScriptUpdate(ctx context.Context, d *schema.ResourceData, meta interface{}) diag.Diagnostics {
@@ -336,13 +390,15 @@ func resourceCloudflareWorkerScriptUpdate(ctx context.Context, d *schema.Resourc
 		return diag.FromErr(fmt.Errorf("script content cannot be empty"))
 	}
 
-	tflog.Info(ctx, fmt.Sprintf("Updating Cloudflare Worker Script from struct: %+v", &scriptData.Params))
-
 	bindings := make(ScriptBindings)
 
 	parseWorkerBindings(d, bindings)
 
 	logpush := d.Get("logpush").(bool)
+
+	// Add additional files
+	additionalfiles := make(AdditionalFiles)
+	parseAdditionalFiles(d, additionalfiles)
 
 	_, err = client.UploadWorker(ctx, cloudflare.AccountIdentifier(accountID), cloudflare.CreateWorkerParams{
 		ScriptName:         scriptData.Params.ScriptName,
@@ -352,6 +408,7 @@ func resourceCloudflareWorkerScriptUpdate(ctx context.Context, d *schema.Resourc
 		Module:             d.Get("module").(bool),
 		Bindings:           bindings,
 		Logpush:            &logpush,
+		AdditionalFiles:    additionalfiles,
 	})
 	if err != nil {
 		return diag.FromErr(errors.Wrap(err, "error updating worker script"))

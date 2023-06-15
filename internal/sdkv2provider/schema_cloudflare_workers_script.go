@@ -5,6 +5,27 @@ import (
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 )
 
+// Resource schema for additional file
+var additionalFileResource = &schema.Resource{
+	Schema: map[string]*schema.Schema{
+		"file_name": {
+			Type:        schema.TypeString,
+			Required:    true,
+			Description: "The name of the file.",
+		},
+		"script_type": {
+			Type:        schema.TypeString,
+			Required:    true,
+			Description: "The type of the file.",
+		},
+		"file_content": {
+			Type:        schema.TypeString,
+			Required:    true,
+			Description: "The base64 encoded content of the file.",
+		},
+	},
+}
+
 var kvNamespaceBindingResource = &schema.Resource{
 	Schema: map[string]*schema.Schema{
 		"name": {
@@ -212,6 +233,11 @@ func resourceCloudflareWorkerScriptSchema() map[string]*schema.Schema {
 			Type:     schema.TypeSet,
 			Optional: true,
 			Elem:     queueBindingResource,
+		},
+		"additional_file": {
+			Type:     schema.TypeSet,
+			Optional: true,
+			Elem:     additionalFileResource,
 		},
 	}
 }
